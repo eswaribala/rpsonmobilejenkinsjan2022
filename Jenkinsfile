@@ -3,7 +3,7 @@ pipeline {
   stages {
     stage('build') {
       steps {
-        sh 'bat "mvn -v"'
+        echo 'Rocking'
       }
     }
 
