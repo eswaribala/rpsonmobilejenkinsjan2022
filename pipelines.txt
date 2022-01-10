@@ -1,0 +1,509 @@
+pipeline {
+    agent none
+    stages {
+        stage('Run Tests') {
+            parallel {
+                stage('Test On Windows') {
+                    agent {
+                        label "windows"
+                    }
+                    steps {
+                        bat "run-tests.bat"
+                    }
+                    post {
+                        always {
+                            junit "**/TEST-*.xml"
+                        }
+                    }
+                }
+                stage('Test On Linux') {
+                    agent {
+                        label "linux"
+                    }
+                    steps {
+                        sh "run-tests.sh"
+                    }
+                    post {
+                        always {
+                            junit "**/TEST-*.xml"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+=======================
+pipeline {
+    agent any
+    stages {
+        stage('Setup parameters') {
+            steps {
+                script { 
+                    properties([
+                        parameters([
+                            choice(
+                                choices: ['ONE', 'TWO'], 
+                                name: 'PARAMETER_01'
+                            ),
+                            booleanParam(
+                                defaultValue: true, 
+                                description: '', 
+                                name: 'BOOLEAN'
+                            ),
+                            text(
+                                defaultValue: '''
+                                this is a multi-line 
+                                string parameter example
+                                ''', 
+                                 name: 'MULTI-LINE-STRING'
+                            ),
+                            string(
+                                defaultValue: 'scriptcrunch', 
+                                name: 'STRING-PARAMETER', 
+                                trim: true
+                            )
+                        ])
+                    ])
+                }
+            }
+        }
+    }   
+}
+================================================
+
+pipeline {
+  agent { label 'worker_node1' }
+  stages {
+    stage('Source') { // Get code
+      steps {
+        // get code from our Git repository
+        git 'https://github.com/brentlaster/roarv2'
+      }
+    }
+    stage('Compile') { // Compile and do unit testing
+      tools {
+        gradle 'gradle4'
+      }
+      steps {
+        // run Gradle to execute compile and unit testing
+        sh 'gradle clean compileJava test'
+      }
+    }
+  }
+}
+=======================================================
+pipeline {
+    agent {
+        node {
+            label 'master'
+        }
+    }
+    stages {
+        stage('build') {
+            steps {
+                sh 'mvn --version'
+            }
+        }
+    }
+    post {
+        always {
+            echo 'This will always run'
+        }
+        success {
+            echo 'This will run only if successful'
+        }
+        failure {
+            echo 'This will run only if failed'
+        }
+ }
+========================================================
+pipeline {
+    agent any
+    parameters {
+        string(name: 'RELEASE_VERSION', defaultValue: '1.0.0', description: 'Application git release tag version')
+    }
+    environment { 
+        ENV_STACK = 'staging'
+    }    
+    stages {
+        stage('Example') {
+            steps {
+                echo "Deploying ${params.RELEASE_VERSION} in ${env.ENV_STACK}"
+            }
+        }
+    }
+}
+=====================================================
+pipeline {
+    agent none
+  
+    stages {
+        stage('Build and Unit test') {
+            agent { label 'maven' }
+            steps {
+                script {
+                    module_Maven('clean verify')
+                }
+            }
+            post {
+                always {
+                    junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: false
+                }
+            }
+        }
+        stage('Publish to Nexus') {
+            agent { label 'maven' }
+            when {
+                beforeAgent true
+                branch 'master'
+            }
+            steps {
+                script {
+                    echo "This is where we publish to Nexus"
+                    module_Artifact.publish()
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                module_Notification.sendEmail(currentBuild.result)
+            }
+        }
+    }
+}
+=========================================================
+pipeline {
+    agent any
+    parameters {
+        choice(
+            choices: ['greeting' , 'silence'],
+            description: '',
+            name: 'REQUESTED_ACTION')
+    }
+
+    stages {
+        stage ('Speak') {
+            when {
+                // Only say hello if a "greeting" is requested
+                expression { params.REQUESTED_ACTION == 'greeting' }
+            }
+            steps {
+                echo "Hello, bitwiseman!"
+            }
+        }
+    }
+}
+=========================================================
+pipeline {
+    agent any
+    parameters {
+        string (
+            defaultValue: '*',
+            description: '',
+            name : 'BRANCH_PATTERN')
+        booleanParam (
+            defaultValue: false,
+            description: '',
+            name : 'FORCE_FULL_BUILD')
+    }
+
+    stages {
+        stage ('Prepare') {
+            steps {
+                checkout([$class: 'GitSCM',
+                    branches: [[name: "origin/${BRANCH_PATTERN}"]],
+                    doGenerateSubmoduleConfigurations: false,
+                    extensions: [[$class: 'LocalBranch']],
+                    submoduleCfg: [],
+                    userRemoteConfigs: [[
+                        credentialsId: 'bitwiseman_github',
+                        url: 'https://github.com/bitwiseman/hermann']]])
+            }
+        }
+
+        stage ('Build') {
+            when {
+                expression {
+                    GIT_BRANCH = 'origin/' + sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
+                    return GIT_BRANCH == 'origin/master' || params.FORCE_FULL_BUILD
+                }
+            }
+            steps {
+                // Freestyle build trigger calls a list of jobs
+                // Pipeline build() step only calls one job
+                // To run all three jobs in parallel, we use "parallel" step
+                // https://jenkins.io/doc/pipeline/examples/#jobs-in-parallel
+                parallel (
+                    linux: {
+                        build job: 'full-build-linux', parameters: [string(name: 'GIT_BRANCH_NAME', value: GIT_BRANCH)]
+                    },
+                    mac: {
+                        build job: 'full-build-mac', parameters: [string(name: 'GIT_BRANCH_NAME', value: GIT_BRANCH)]
+                    },
+                    windows: {
+                        build job: 'full-build-windows', parameters: [string(name: 'GIT_BRANCH_NAME', value: GIT_BRANCH)]
+                    },
+                    failFast: false)
+            }
+        }
+        stage ('Build Skipped') {
+            when {
+                expression {
+                    GIT_BRANCH = 'origin/' + sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
+                    return !(GIT_BRANCH == 'origin/master' || params.FORCE_FULL_BUILD)
+                }
+            }
+            steps {
+                echo 'Skipped full build.'
+            }
+        }
+    }
+}
+============================================
+pipeline {
+    agent any
+        stages {
+            stage('Parameters'){
+                steps {
+                    script {
+                    properties([
+                            parameters([
+                                [$class: 'ChoiceParameter', 
+                                    choiceType: 'PT_SINGLE_SELECT', 
+                                    description: 'Select the Environemnt from the Dropdown List', 
+                                    filterLength: 1, 
+                                    filterable: false, 
+                                    name: 'Env', 
+                                    script: [
+                                        $class: 'GroovyScript', 
+                                        fallbackScript: [
+                                            classpath: [], 
+                                            sandbox: false, 
+                                            script: 
+                                                "return['Could not get The environemnts']"
+                                        ], 
+                                        script: [
+                                            classpath: [], 
+                                            sandbox: false, 
+                                            script: 
+                                                "return['dev','stage','prod']"
+                                        ]
+                                    ]
+                                ],
+                                [$class: 'CascadeChoiceParameter', 
+                                    choiceType: 'PT_SINGLE_SELECT', 
+                                    description: 'Select the AMI from the Dropdown List',
+                                    name: 'AMI List', 
+                                    referencedParameters: 'Env', 
+                                    script: 
+                                        [$class: 'GroovyScript', 
+                                        fallbackScript: [
+                                                classpath: [], 
+                                                sandbox: false, 
+                                                script: "return['Could not get Environment from Env Param']"
+                                                ], 
+                                        script: [
+                                                classpath: [], 
+                                                sandbox: false, 
+                                                script: '''
+                                                if (Env.equals("dev")){
+                                                    return["ami-sd2345sd", "ami-asdf245sdf", "ami-asdf3245sd"]
+                                                }
+                                                else if(Env.equals("stage")){
+                                                    return["ami-sd34sdf", "ami-sdf345sdc", "ami-sdf34sdf"]
+                                                }
+                                                else if(Env.equals("prod")){
+                                                    return["ami-sdf34sdf", "ami-sdf34ds", "ami-sdf3sf3"]
+                                                }
+                                                '''
+                                            ] 
+                                    ]
+                                ],
+                                [$class: 'DynamicReferenceParameter', 
+                                    choiceType: 'ET_ORDERED_LIST', 
+                                    description: 'Select the  AMI based on the following infomration', 
+                                    name: 'Image Information', 
+                                    referencedParameters: 'Env', 
+                                    script: 
+                                        [$class: 'GroovyScript', 
+                                        script: 'return["Could not get AMi Information"]', 
+                                        script: [
+                                            script: '''
+                                                    if (Env.equals("dev")){
+                                                        return["ami-sd2345sd:  AMI with Java", "ami-asdf245sdf: AMI with Python", "ami-asdf3245sd: AMI with Groovy"]
+                                                    }
+                                                    else if(Env.equals("stage")){
+                                                        return["ami-sd34sdf:  AMI with Java", "ami-sdf345sdc: AMI with Python", "ami-sdf34sdf: AMI with Groovy"]
+                                                    }
+                                                    else if(Env.equals("prod")){
+                                                        return["ami-sdf34sdf:  AMI with Java", "ami-sdf34ds: AMI with Python", "ami-sdf3sf3: AMI with Groovy"]
+                                                    }
+                                                    '''
+                                                ]
+                                        ]
+                                ]
+                            ])
+                        ])
+                    }
+                }
+            }
+        }   
+}
+=======================================
+pipeline {
+    agent any
+    parameters {
+        string(name: 'yyyyy', defaultValue: 'XXX', description: 'Hello world')
+
+        text(name: 'Demo', defaultValue: '', description: 'Demo parameter')
+
+        booleanParam(name: 'Boolean', defaultValue: true, description: 'Boolean value')
+
+        choice(name: 'CHOICE', choices: ['A', 'B', 'C'], description: ‘Choose one')
+
+        password(name: 'PASSWORD', defaultValue: 'Key', description: 'Enter a password')
+
+        file(name: "FILE", description: "file to upload")
+    }
+    stages {
+        stage('Example') {
+            steps {
+                echo "Hello ${params.yyyyy}"
+
+                echo "Biography: ${params.Demo}"
+
+                echo "Toggle: ${params.Boolean }"
+
+                echo "Choice: ${params.CHOICE}"
+
+                echo "Password: ${params.PASSWORD}"
+            }
+        }
+    }
+}
+==================================================
+pipeline {
+    agent any
+    stages {
+        stage('NORMAL Stage') {
+            steps {
+                echo 'I am one'
+            }
+        }
+        stage('Parallel Stage') {
+            when {
+                branch 'master'
+            }
+            failFast true
+            parallel {
+                stage('stage one') {
+                    agent {
+                        label "stageonebranch"
+                    }
+                    steps {
+                        echo "Me in stage one"
+                    }
+                }
+                stage('Stage two') {
+                    agent {
+                        label "stage two"
+                    }
+                    steps {
+                        echo "Me in stage two"
+                    }
+                }
+                stage('Stage three') {
+                    agent {
+                        label "Stage Three"
+                    }
+                }
+            }
+        }
+    }
+}
+======================================================
+pipeline {
+    agent any
+    stages {
+        stage('Example Build') {
+            when {
+                anyOf { 
+			branch 'master'; branch 'staging' 
+		}
+            }
+            steps {
+                echo 'Hello World'
+            }
+        }
+        stage('Example Deploy') {
+            when {
+                branch 'production'
+            }
+            steps {
+                echo 'Deploying'
+            }
+        }
+    }
+}
+===================================
+pipeline {
+    agent any
+    options {
+        timeout(time: 30, unit: 'MINUTES') 
+    }
+    stages {
+        stage('Example') {
+            steps {
+                echo 'Hello World'
+            }
+        }
+    }
+}
+================================
+pipeline {
+    agent any
+    stages {
+        stage('Example') {
+            input {
+                message "Can we Proceed?"
+                ok "Yes"
+                submitter "Digital Varys"
+                parameters {
+                    string(name: 'PERSON', defaultValue: 'DigiralVarys', description: 'Member')
+                }
+            }
+            steps {
+                echo "${PERSON}, is proceeding..."
+            }
+        }
+    }
+}
+====================================
+pipeline {
+    agent any
+    environment { 
+        example key = 'example value'
+    }
+    stages {
+        stage('Example') {
+            environment { 
+                Secret_key = credentials('secret-text') 
+            }
+        }
+    }
+}
+====================================
+pipeline {
+    agent any
+    stages {
+        stage('Example') {
+            steps { 
+                sh 'mvn compile'
+            }
+        }
+    }
+}
+======================
