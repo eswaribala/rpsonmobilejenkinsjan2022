@@ -6,7 +6,7 @@ pipeline {
         stage('build') {
           steps {
             echo 'Rocking'
-            timeout(time: 10)
+            timeout(time: 10, activity: true)
           }
         }
 
