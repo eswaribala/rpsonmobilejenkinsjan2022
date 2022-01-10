@@ -1,0 +1,41 @@
+pipeline {
+	agent any
+	
+	stages {
+		stage("Build") {
+			steps {
+				bat 'mvn -v'
+			}
+		}
+		
+		stage("Testing") {
+			parallel {
+				stage("Unit Tests") {
+					agent any
+					steps {
+					    bat 'docker pull openjdk:8' 
+						bat 'java -version'
+					}
+				}
+				stage("Functional Tests") {
+					agent any
+					steps {
+					    bat 'docker pull openjdk:8-jdk-alpine'
+						bat 'java -version'
+					}
+				}
+				stage("Integration Tests") {
+					steps {
+						bat 'java -version'
+					}
+				}
+			}
+		}
+		
+		stage("Deploy") {
+			steps {
+				echo "Deploy!"
+			}
+		}
+	}
+}
