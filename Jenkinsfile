@@ -21,6 +21,12 @@ pipeline {
           }
         }
 
+        stage('integrationtest') {
+          steps {
+            echo 'integration test'
+          }
+        }
+
       }
     }
 
